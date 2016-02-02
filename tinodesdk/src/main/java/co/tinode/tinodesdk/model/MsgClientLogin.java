@@ -12,6 +12,9 @@ public class MsgClientLogin {
     public String secret; // <uname + ":" + password>
     public String ua; // user agent
 
+    public MsgClientLogin() {
+    }
+
     public MsgClientLogin(String id, String scheme, String secret, String userAgent) {
         this.scheme = scheme;
         this.secret = secret;
