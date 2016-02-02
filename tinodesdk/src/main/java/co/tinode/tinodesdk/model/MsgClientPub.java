@@ -9,6 +9,9 @@ public class MsgClientPub<T> {
     public Boolean noecho;
     public T content;
 
+    public MsgClientPub() {
+    }
+
     public MsgClientPub(String id, String topic, Boolean noecho, T content) {
         this.id = id;
         this.topic = topic;
