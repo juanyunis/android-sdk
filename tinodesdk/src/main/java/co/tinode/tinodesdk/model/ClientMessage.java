@@ -9,4 +9,5 @@ public class ClientMessage<T> {
     public MsgClientPub<T> pub;
     public MsgClientSub sub;
     public MsgClientLeave leave;
+    public MsgClientNote note;
 }
