@@ -1,15 +1,18 @@
+/**
+ * Created by gene on 06/02/16.
+ */
+
 package co.tinode.tinodesdk;
 
-/**
- * Created by gsokolov on 2/5/16.
- */
 import android.util.Log;
+
+import co.tinode.tinodesdk.model.ServerMessage;
 
 import com.fasterxml.jackson.databind.JavaType;
 
 import java.io.IOException;
+import java.util.HashMap;
 
-import co.tinode.tinodesdk.model.ServerMessage;
 
 /**
  *
@@ -19,31 +22,26 @@ import co.tinode.tinodesdk.model.ServerMessage;
 public class Topic<T> {
     private static final String TAG = "com.tinode.Topic";
 
-    protected static final int STATUS_SUBSCRIBED = 2;
-    protected static final int STATUS_PENDING = 1;
-    protected static final int STATUS_UNSUBSCRIBED = 0;
-
-    protected static final int PACKET_TYPE_PUB = 1;
-    protected static final int PACKET_TYPE_SUB = 2;
-    protected static final int PACKET_TYPE_UNSUB = 3;
-
     protected JavaType mTypeOfData;
     protected String mName;
-    protected Connection mConnection;
-    protected int mStatus;
+    protected Tinode mTinode;
+    protected boolean mSubscribed;
+
+    // Outstanding requests, key = request id
+    protected HashMap<String, Integer> mReplyExpected;
 
     private Listener<T> mListener;
 
-    public Topic(Connection conn, String name, JavaType typeOfT, Listener<T> l) {
+    public Topic(Tinode tinode, String name, JavaType typeOfT, Listener<T> l) {
         mTypeOfData = typeOfT;
-        mConnection = conn;
+        mTinode = tinode;
         mName = name;
         mListener = l;
-        mStatus = STATUS_UNSUBSCRIBED;
+        mSubscribed = false;
     }
 
-    public Topic(Connection conn, String name, Class<?> typeOfT, Listener<T> l) {
-        this(conn, name, Tinode.getTypeFactory().constructType(typeOfT), l);
+    public Topic(Tinode tinode, String name, Class<?> typeOfT, Listener<T> l) {
+        this(tinode, name, tinode.getTypeFactory().constructType(typeOfT), l);
     }
 
     /**
@@ -54,16 +52,16 @@ public class Topic<T> {
      * Construct {@code }typeOfT} with one of {@code
      * com.fasterxml.jackson.databind.type.TypeFactory.constructXYZ()} methods such as
      * {@code mMyConnectionInstance.getTypeFactory().constructType(MyPayloadClass.class)} or see
-     * source of {@link com.tinode.streaming.PresTopic} constructor.
+     * source of {@link com.tinode.PresTopic} constructor.
      *
      * The actual topic name will be set after completion of a successful Subscribe call
      *
-     * @param conn connection
+     * @param tinode tinode instance
      * @param typeOfT type of content
      * @param l event listener
      */
-    public Topic(Connection conn, JavaType typeOfT, Listener<T> l) {
-        this(conn, Connection.TOPIC_NEW, typeOfT, l);
+    public Topic(Tinode tinode, JavaType typeOfT, Listener<T> l) {
+        this(tinode, Tinode.TOPIC_NEW, typeOfT, l);
     }
 
     /**
@@ -71,8 +69,8 @@ public class Topic<T> {
      * Topic will not be usable until Subscribe is called
      *
      */
-    public Topic(Connection conn, Class<?> typeOfT, Listener<T> l) {
-        this(conn, Tinode.getTypeFactory().constructType(typeOfT), l);
+    public Topic(Tinode tinode, Class<?> typeOfT, Listener<T> l) {
+        this(tinode, tinode.getTypeFactory().constructType(typeOfT), l);
     }
 
     /**
@@ -81,12 +79,8 @@ public class Topic<T> {
      * @throws IOException
      */
     public void Subscribe() throws IOException {
-        if (mStatus == STATUS_UNSUBSCRIBED) {
-            String id = mConnection.subscribe(this);
-            if (id != null) {
-                mReplyExpected.put(id, PACKET_TYPE_SUB);
-            }
-            mStatus = STATUS_PENDING;
+        if (!mSubscribed) {
+            mTinode.subscribe(this, null);
         }
     }
 

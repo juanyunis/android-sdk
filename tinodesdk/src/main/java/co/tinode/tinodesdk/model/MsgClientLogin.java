@@ -16,18 +16,23 @@ public class MsgClientLogin {
     }
 
     public MsgClientLogin(String id, String scheme, String secret, String userAgent) {
+        this.id = id;
         this.scheme = scheme;
         this.secret = secret;
         this.ua = userAgent;
     }
 
-    public void Login(String scheme, String secret) {
+    public void Login(String scheme, String secret, String userAgent) {
         this.scheme = scheme;
         this.secret = secret;
+        this.ua = userAgent;
     }
 
-    public void LoginBasic(String uname, String password) {
-        Login(LOGIN_BASIC, uname + ":" + password);
+    public void LoginBasic(String uname, String password, String userAgent) {
+        Login(LOGIN_BASIC, uname + ":" + password, userAgent);
     }
 
+    public static String makeBasicToken(String uname, String password) {
+        return uname + ":" + password;
+    }
 }

@@ -1,9 +1,6 @@
 package co.tinode.tinodesdk;
 
-/**
- * Created by gsokolov on 2/2/16.
- */
-
+import android.os.Build;
 import android.util.Log;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -23,29 +20,26 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executor;
 
-import co.tinode.tinodesdk.model.ClientMessage;
-import co.tinode.tinodesdk.model.MsgClientLogin;
-import co.tinode.tinodesdk.model.MsgClientPub;
-import co.tinode.tinodesdk.model.MsgClientSub;
-import co.tinode.tinodesdk.model.MsgServerCtrl;
-import co.tinode.tinodesdk.model.MsgServerData;
-import co.tinode.tinodesdk.model.MsgServerInfo;
-import co.tinode.tinodesdk.model.MsgServerMeta;
-import co.tinode.tinodesdk.model.MsgServerPres;
-import co.tinode.tinodesdk.model.ServerMessage;
+import co.tinode.tinodesdk.model.*;
 
 public class Tinode {
     private static final String TAG = "co.tinode.tinodesdk.Tinode";
 
+    protected static final String TOPIC_NEW = "new";
+    protected static final String TOPIC_ME = "me";
+    protected static final String USER_NEW = "new";
+
     private static final String PROTOVERSION = "0";
     private static final String VERSION = "0.5";
     private static final String LIBRARY = "tindroid/0.5";
-
-    private static final String TOPIC_NEW = "new";
-    private static final String TOPIC_ME = "me";
-    private static final String USER_NEW = "new";
 
     private static ObjectMapper sJsonMapper;
     private static JsonFactory sJsonFactory;
@@ -53,22 +47,25 @@ public class Tinode {
 
     private String mApiKey;
     private String mServerHost;
+    private String mAppName;
 
-    private String mMyId;
+    private String mMyUid;
     private int mPacketCount;
+    private int mMsgId;
     private EventListener mListener;
 
-    private Tinode() {
-    }
+    private ConcurrentMap<String,MessageFuture> mFutures;
+    private HashMap<String,Topic> mTopics;
+    private Executor mExecutor;
 
     /**
      * Initialize Tinode package
      *
-     * @param appname name of the application to include in User Agent
-     * @param host URL of the server
-     * @param apikey api key provided by Tinode
+     * @param appname name of the application to include in User Agent on login.
+     * @param host host name of the server, e.g. 'api.tinode.co' or 'localhost:8080'
+     * @param apikey API key generate by key-gen utility
      */
-    public void initialize(String appname,  String host, String apikey) {
+    public Tinode(String appname, String host, String apikey) {
         sJsonMapper = new ObjectMapper();
         // Silently ignore unknown properties
         sJsonMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
@@ -76,34 +73,29 @@ public class Tinode {
         sJsonMapper.setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
         sTypeFactory = sJsonMapper.getTypeFactory();
 
+        mAppName = appname;
         mApiKey = apikey;
         mServerHost = host;
+
+        mFutures = new ConcurrentHashMap<String,MessageFuture>(16, 0.75f, 4);
+        mTopics = new HashMap<String,Topic>();
     }
 
     /**
      * Finds topic for the packet and calls topic's {@link Topic#dispatch(ServerMessage)} method.
      * This method can be safely called from the UI thread after overriding
      * {@link Connection.EventListener#onMessage(ServerMessage)}
-     *
-     * There are two types of messages:
-     * <ul>
-     * <li>Control packets in response to requests sent by this client</li>
-     * <li>Data packets</li>
-     * </ul>
-     *
-     * This method dispatches control packets by matching id of the message with a map of
-     * outstanding requests.<p/>
-     * The data packets are dispatched by topic name. If topic is unknown,
-     * an onNewTopic is fired, then message is dispatched to the topic it returns.
-     *
-     * @param message message to be dispatched
+     **
+     * @param message message to be parsed dispatched
      * @return true if packet was successfully dispatched, false if topic was not found
      */
-    public boolean dispatchPacket(String message) {
+    private boolean dispatchPacket(String message) {
         if (message == null)
             return false;
 
-        Log.d(TAG, "dispatchPacket: processing message");
+        Log.d(TAG, "in: " + message);
+
+        mPacketCount++;
 
         if (mListener != null) {
             mListener.onRawMessage(message);
@@ -114,124 +106,92 @@ public class Tinode {
             Log.i(TAG, "Failed to parse packet");
             return false;
         }
+
         if (mListener != null) {
             mListener.onMessage(pkt);
         }
 
         if (pkt.ctrl != null) {
-            Log.d(TAG, "dispatchPacket: control");
-            // This is a response to previous action
-            String id = pkt.getId();
-            if (id != null) {
-                Cmd cmd = mRequests.remove(id);
-                if (cmd != null) {
-                    switch (cmd.type) {
-                        case Cmd.LOGIN:
-                            if (pkt.ctrl.code == 200) {
-                                Tinode.setAuthParams(pkt.ctrl.getStringParam("uid"),
-                                        pkt.ctrl.getStringParam("token"),
-                                        pkt.ctrl.getDateParam("expires"));
-                            }
-                            if (mListener != null) {
-                                mListener.onLogin(pkt.ctrl.code, pkt.ctrl.text);
-                            }
-                            return true;
-                        case Cmd.SUB:
-                            if (pkt.ctrl.code >= 200 && pkt.ctrl.code < 300) {
-                                if (TOPIC_NEW.equals(cmd.source.getName())) {
-                                    // Replace "!new" with the actual topic name
-                                    cmd.source.setName(pkt.getTopic());
-                                }
-                                mSubscriptions.put(cmd.source.getName(), cmd.source);
-                                Log.d(TAG, "Sub completed: " + cmd.source.getName());
-                            }
-                            return cmd.source.dispatch(pkt);
-                        case Cmd.UNSUB:
-                            // This could fail for two reasons:
-                            // 1. Not subscribed
-                            // 2. Something else
-                            // Either way, no need to remove topic from subscription in case of
-                            // failure
-                            if (pkt.ctrl.code >= 200 && pkt.ctrl.code < 300) {
-                                mSubscriptions.remove(cmd.source.getName());
-                            }
-                            return cmd.source.dispatch(pkt);
-                        case Cmd.PUB:
-                            return cmd.source.dispatch(pkt);
-                    }
-                }
-            } else {
-                Log.i(TAG, "Unexpected control packet");
+
+            if (mListener != null) {
+                mListener.onCtrlMessage(pkt.ctrl);
             }
-        } else if (pkt.data != null) {
-            // This is a new data packet
-            String topicName = pkt.getTopic();
-            Log.d(TAG, "dispatchPacket: data for " + topicName);
-            if (topicName != null) {
-                // The topic must be in the list of subscriptions already.
-                // It must have been created in {@link #pareseMsgServerData} or earlier
-                Topic topic = mSubscriptions.get(topicName);
-                if (topic != null) {
-                    // This generates the "unchecked" warning
-                    return topic.dispatch(pkt);
-                } else {
-                    Log.i(TAG, "Packet for unknown topic " + topicName);
+            if (mPacketCount == 1) {
+                if (mListener != null) {
+                    mListener.onConnect(pkt.ctrl.code, pkt.ctrl.text, pkt.ctrl.params);
                 }
             }
+
+            MessageFuture m = mFutures.remove(pkt.ctrl.id);
+            if (m != null) {
+                m.resolve(pkt.ctrl);
+            }
+            return true;
         }
+        if (pkt.meta != null) {
+            Topic topic = mTopics.get(pkt.meta.topic);
+            if (topic != null) {
+                topic.routeMeta(pkt.meta);
+            }
+
+            if (mListener != null) {
+                mListener.onMetaMessage(pkt.meta);
+            }
+
+            return true;
+        }
+        if (pkt.data != null) {
+            Topic topic = mTopics.get(pkt.data.topic);
+            if (topic != null) {
+                topic.routeData(pkt.data);
+            }
+
+            if (mListener != null) {
+                mListener.onDataMessage(pkt.data);
+            }
+            return true;
+        }
+        if (pkt.pres != null) {
+            Topic topic = mTopics.get(pkt.pres.topic);
+            if (topic != null) {
+                topic.routePres(pkt.pres);
+            }
+
+            if (mListener != null) {
+                mListener.onPresMessage(pkt.pres);
+            }
+            return true;
+        }
+        if (pkt.info != null) {
+            Topic topic = mTopics.get(pkt.info.topic);
+            if (topic != null) {
+                topic.routeInfo(pkt.info);
+            }
+
+            if (mListener != null) {
+                mListener.onInfoMessage(pkt.info);
+            }
+            return true;
+        }
+
+        // TODO(gene): decide what to do on unknown message type
         return false;
     }
 
-    public static String getApiKey() {
-        return sApiKey;
+    public String getApiKey() {
+        return mApiKey;
     }
 
-    public static URL getEndpointUrl() {
-        return sServerUrl;
-    }
-    public static URI getEndpointUri() {
-        try {
-            return sServerUrl.toURI();
-        } catch (URISyntaxException e) {
-            return null;
-        }
+    public String getServerHost() {
+        return mServerHost;
     }
 
-    synchronized public static void setAuthParams(String myId, String token, Date expires) {
-        sMyId = myId;
-        sAuthToken = token;
-        sAuthExpires = expires;
+    public String getMyId() {
+        return mMyUid;
     }
 
-    synchronized public static void clearAuthParams() {
-        sMyId = null;
-        sAuthToken = null;
-        sAuthExpires = null;
-    }
-
-    synchronized public static String getAuthToken() {
-        if (sAuthToken != null) {
-            Date now = new Date();
-            if (!sAuthExpires.before(now)) {
-                return sAuthToken;
-            } else {
-                sAuthToken = null;
-                sAuthExpires = null;
-            }
-        }
-        return null;
-    }
-
-    public static String getMyId() {
-        return sMyId;
-    }
-
-    public static void clearMyId() {
-        sMyId = null;
-    }
-
-    public static boolean isAuthenticated() {
-        return (sMyId != null);
+    public boolean isAuthenticated() {
+        return (mMyUid != null);
     }
 
     public static TypeFactory getTypeFactory() {
@@ -242,41 +202,84 @@ public class Tinode {
         return sJsonMapper;
     }
 
+    public void setExecutor(Executor exec) {
+        mExecutor = exec;
+    }
+    protected String makeUserAgent() {
+        return mAppName + " (Android " + Build.VERSION.RELEASE + "; "
+                + Locale.getDefault().toString() + "; "
+                + Build.MANUFACTURER + " " + Build.MODEL + "/" + Build.PRODUCT +
+                ") tinodesdk/" + VERSION;
+    }
+
     /**
      * Send a basic login packet to the server. A connection must be established prior to calling
      * this method. Success or failure will be reported through {@link Connection.EventListener#onLogin(int, String)}
      *
      *  @param uname user name
      *  @param password password
-     *  @return id of the message (which is either "login" or null)
+     *  @param done callback to call when the response packet arrives
+     *  @return MessageFuture of the reply ctrl message
      *  @throws IOException if there is no connection
      */
-    public String Login(String uname, String password) throws IOException {
-        return login(MsgClientLogin.LOGIN_BASIC, MsgClientLogin.makeToken(uname, password));
+    public MessageFuture LoginBasic(String uname, String password,
+                                    MessageFuture.CompletionListener done) throws IOException {
+        return login(MsgClientLogin.LOGIN_BASIC,
+                MsgClientLogin.makeBasicToken(uname, password), done);
     }
 
     /**
-     * Send a token login packet to server. A connection must be established prior to calling
+     * Send a basic login packet to the server. A connection must be established prior to calling
      * this method. Success or failure will be reported through {@link Connection.EventListener#onLogin(int, String)}
      *
-     *  @param token a previously obtained or generated login token
-     *  @return id of the message (which is either "login" or null)
-     *  @throws IOException if there is not connection
+     *  @param uname user name
+     *  @param password password
+     *  @return MessageFuture of the reply ctrl message
+     *  @throws IOException if there is no connection
      */
-    public String Login(String token) throws IOException {
-        return login(MsgClientLogin.LOGIN_TOKEN, token);
+    public MessageFuture LoginBasic(String uname, String password) throws IOException {
+        return login(MsgClientLogin.LOGIN_BASIC,
+                MsgClientLogin.makeBasicToken(uname, password), null);
     }
 
-    protected String login(String scheme, String secret) throws IOException {
+    protected MessageFuture login(String scheme, String secret,
+                                  MessageFuture.CompletionListener done) throws IOException {
         ClientMessage msg = new ClientMessage();
-        msg.login = new MsgClientLogin();
-        msg.login.setId("login");
-        msg.login.Login(scheme, secret);
+        msg.login = new MsgClientLogin(getNextId(), scheme, secret, makeUserAgent());
         try {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
-            expectReply(Cmd.LOGIN, "login", null);
-            return "login";
+            MessageFuture future = null;
+            if (msg.login.id != null) {
+                future = new MessageFuture(done, mExecutor);
+                mFutures.put(msg.login.id, future);
+            }
+            return future;
         } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Low-level subscription request. The subsequent messages on this topic will not
+     * be automatically dispatched. A {@link Topic#Subscribe()} should be normally used instead.
+     *
+     * @param topicName name of the topic to subscribe to
+     * @return id of the sent subscription packet, if {@link #wantAkn(boolean)} is set to true, null otherwise
+     * @throws IOException
+     */
+    public MessageFuture Subscribe(String topicName,
+                                   MessageFuture.CompletionListener done) throws IOException {
+        ClientMessage msg = new ClientMessage();
+        msg.sub = new MsgClientSub();
+        msg.sub.id = getNextId();
+        msg.sub.topic = topicName;
+        try {
+            send(Tinode.getJsonMapper().writeValueAsString(msg));
+            MessageFuture future = new MessageFuture(done, mExecutor);
+            mFutures.put(msg.sub.id, future);
+            return future;
+        } catch (JsonProcessingException e) {
+            Log.i(TAG, "Failed to serialize message", e);
             return null;
         }
     }
@@ -290,50 +293,16 @@ public class Tinode {
      * @return request id
      * @throws IOException
      */
-    protected String subscribe(Topic<?> topic) throws IOException {
-        wantAkn(true);  // Message dispatching to Topic<?> requires acknowledgements
+    protected MessageFuture subscribe(Topic<?> topic,
+                                      MessageFuture.CompletionListener done) throws IOException {
+        wantAkn(true);
 
         String name = topic.getName();
         if (name == null || name.equals("")) {
             Log.i(TAG, "Empty topic name");
             return null;
         }
-        String id = Subscribe(name);
-        if (id != null) {
-            expectReply(Cmd.SUB, id, topic);
-        }
-        return id;
-    }
-
-    /**
-     * Low-level subscription request. The subsequent messages on this topic will not
-     * be automatically dispatched. A {@link Topic#Subscribe()} should be normally used instead.
-     *
-     * @param topicName name of the topic to subscribe to
-     * @return id of the sent subscription packet, if {@link #wantAkn(boolean)} is set to true, null otherwise
-     * @throws IOException
-     */
-    public String Subscribe(String topicName) throws IOException {
-        ClientMessage msg = new ClientMessage();
-        msg.sub = new MsgClientSub(topicName);
-        String id = getNextId();
-        msg.sub.setId(id);
-        try {
-            send(Tinode.getJsonMapper().writeValueAsString(msg));
-            return id;
-        } catch (JsonProcessingException e) {
-            Log.i(TAG, "Failed to serialize message", e);
-            return null;
-        }
-    }
-
-    protected String unsubscribe(Topic<?> topic)  throws IOException {
-        wantAkn(true);
-        String id = Unsubscribe(topic.getName());
-        if (id != null) {
-            expectReply(Cmd.UNSUB, id, topic);
-        }
-        return id;
+        return Subscribe(name, done);
     }
 
     /**
@@ -344,26 +313,28 @@ public class Tinode {
      * @return id of the sent subscription packet, if {@link #wantAkn(boolean)} is set to true, null otherwise
      * @throws IOException
      */
-    public String Unsubscribe(String topicName) throws IOException {
+    public MessageFuture Leave(String topicName, boolean unsub,
+                        MessageFuture.CompletionListener done) throws IOException {
         ClientMessage msg = new ClientMessage();
-        msg.unsub = new MsgClientUnsub(topicName);
-        msg.unsub.setId(getNextId());
-        mSubscriptions.remove(topicName);
+        msg.leave = new MsgClientLeave();
+        msg.leave.id = getNextId();
+        msg.leave.topic = topicName;
+        msg.leave.unsub = unsub;
         try {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
-            return msg.unsub.getId();
+            MessageFuture future = new MessageFuture(done, mExecutor);
+            mFutures.put(msg.sub.id, future);
+            return future;
         } catch (JsonProcessingException e) {
             return null;
         }
     }
 
-    protected String publish(Topic<?> topic, Object content) throws IOException {
+
+    protected MessageFuture unsubscribe(Topic<?> topic, boolean unsub,
+                                 MessageFuture.CompletionListener done)  throws IOException {
         wantAkn(true);
-        String id = Publish(topic.getName(), content);
-        if (id != null) {
-            expectReply(Cmd.PUB, id, topic);
-        }
-        return id;
+        return Leave(topic.getName(), unsub, done);
     }
 
     /**
@@ -386,6 +357,16 @@ public class Tinode {
             return null;
         }
     }
+
+    protected String publish(Topic<?> topic, Object content) throws IOException {
+        wantAkn(true);
+        String id = Publish(topic.getName(), content);
+        if (id != null) {
+            expectReply(Cmd.PUB, id, topic);
+        }
+        return id;
+    }
+
 
     /**
      * Assigns packet id, if needed, converts {@link com.tinode.streaming.model.ClientMessage} to Json string,
@@ -444,22 +425,11 @@ public class Tinode {
     public boolean wantAkn(boolean akn) {
         boolean prev = (mMsgId != 0);
         if (akn) {
-            mMsgId = 0xFFFFFF + (int) (Math.random() * 0xFFFFFF);
+            mMsgId = 0xFFFF + (int) (Math.random() * 0xFFFF);
         } else {
             mMsgId = 0;
         }
         return prev;
-    }
-
-    /**
-     * Makes a record of an outgoing packet. This is used to match requests to replies.
-     *
-     * @param type packet type, see constants in {@link Cmd}
-     * @param id packet id
-     * @param topic topic (could be null)
-     */
-    protected void expectReply(int type, String id, Topic<?> topic) {
-        mRequests.put(id, new Cmd(type, id, topic));
     }
 
     /**

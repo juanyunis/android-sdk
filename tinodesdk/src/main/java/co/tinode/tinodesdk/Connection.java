@@ -6,42 +6,20 @@ package co.tinode.tinodesdk;
 import android.os.Handler;
 import android.util.Log;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParseException;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.type.TypeFactory;
-
 import com.neovisionaries.ws.client.WebSocket;
 import com.neovisionaries.ws.client.WebSocketAdapter;
 import com.neovisionaries.ws.client.WebSocketException;
 import com.neovisionaries.ws.client.WebSocketFactory;
 import com.neovisionaries.ws.client.WebSocketFrame;
 
-import co.tinode.tinodesdk.model.ClientMessage;
-import co.tinode.tinodesdk.model.MsgClientLogin;
-import co.tinode.tinodesdk.model.MsgClientPub;
-import co.tinode.tinodesdk.model.MsgClientSub;
-import co.tinode.tinodesdk.model.MsgClientLeave;
-import co.tinode.tinodesdk.model.MsgClientNote;
-import co.tinode.tinodesdk.model.ServerMessage;
-import co.tinode.tinodesdk.model.MsgServerCtrl;
-import co.tinode.tinodesdk.model.MsgServerData;
-
-
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+
+import co.tinode.tinodesdk.model.ServerMessage;
 
 /**
  * Singleton class representing a streaming communication channel between a client and a server
@@ -66,7 +44,7 @@ public class Connection {
 
     // List of live subscriptions, key=[topic name], value=[topic, subscribed or
     // subscription pending]
-    protected ArrayMap<String, Topic<?>> mSubscriptions;
+    protected ArrayMap<String, co.tinode.tinodesdk.Topic<?>> mSubscriptions;
 
     // Exponential backoff/reconnecting
     // TODO(gene): implement autoreconnect
