@@ -10,4 +10,7 @@ public class ClientMessage<T> {
     public MsgClientSub sub;
     public MsgClientLeave leave;
     public MsgClientNote note;
+
+    public ClientMessage() {
+    }
 }
