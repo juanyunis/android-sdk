@@ -1,3 +1,9 @@
+package co.tinode.tinodesdk;
+
+/**
+ * Created by gsokolov on 2/2/16.
+ */
+
 import android.util.Log;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -30,9 +36,6 @@ import co.tinode.tinodesdk.model.MsgServerMeta;
 import co.tinode.tinodesdk.model.MsgServerPres;
 import co.tinode.tinodesdk.model.ServerMessage;
 
-/**
- * Created by gsokolov on 2/2/16.
- */
 public class Tinode {
     private static final String TAG = "co.tinode.tinodesdk.Tinode";
 
@@ -73,8 +76,8 @@ public class Tinode {
         sJsonMapper.setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
         sTypeFactory = sJsonMapper.getTypeFactory();
 
-        sApiKey = apikey;
-        sServerHost = host;
+        mApiKey = apikey;
+        mServerHost = host;
     }
 
     /**
