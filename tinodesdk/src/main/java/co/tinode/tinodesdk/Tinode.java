@@ -274,11 +274,10 @@ public class Tinode {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
             PromisedReply outer = null;
             if (msg.login.id != null) {
-                PromisedReply inner = new PromisedReply(mExecutor);
-                mFutures.put(msg.login.id, inner);
+                PromisedReply inner = makePromise(msg.login.id);
                 inner.thenApply(new PromisedReply.SuccessListener() {
                     @Override
-                    public PromisedReply onSuccess(Object result, PromisedReply next) {
+                    public PromisedReply onSuccess(Object result) {
                         return null;
                     }
                 }, new PromisedReply.FailureListener() {
@@ -535,6 +534,18 @@ public class Tinode {
         return String.valueOf(++mMsgId);
     }
 
+    /**
+     * Create promise which will be resolved or rejected when a message with the given id is
+     * received.
+     *
+     * @param id id of the message which will resolve/reject this promise
+     * @return created promise
+     */
+    private PromisedReply makePromise(String id) {
+        PromisedReply promise = new PromisedReply<>(mExecutor);
+        mFutures.put(id, promise);
+        return promise;
+    }
 
     /**
      * Callback interface called by Connection when it receives events from the websocket.
