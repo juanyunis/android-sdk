@@ -6,6 +6,10 @@ package co.tinode.tinodesdk;
 
 import android.util.Log;
 
+import co.tinode.tinodesdk.model.MsgServerData;
+import co.tinode.tinodesdk.model.MsgServerInfo;
+import co.tinode.tinodesdk.model.MsgServerMeta;
+import co.tinode.tinodesdk.model.MsgServerPres;
 import co.tinode.tinodesdk.model.ServerMessage;
 
 import com.fasterxml.jackson.databind.JavaType;
@@ -20,15 +24,12 @@ import java.util.HashMap;
  *
  */
 public class Topic<T> {
-    private static final String TAG = "com.tinode.Topic";
+    private static final String TAG = "co.tinode.tinodesdk.Topic";
 
     protected JavaType mTypeOfData;
     protected String mName;
     protected Tinode mTinode;
     protected boolean mSubscribed;
-
-    // Outstanding requests, key = request id
-    protected HashMap<String, Integer> mReplyExpected;
 
     private Listener<T> mListener;
 
@@ -41,7 +42,7 @@ public class Topic<T> {
     }
 
     public Topic(Tinode tinode, String name, Class<?> typeOfT, Listener<T> l) {
-        this(tinode, name, tinode.getTypeFactory().constructType(typeOfT), l);
+        this(tinode, name, Tinode.getTypeFactory().constructType(typeOfT), l);
     }
 
     /**
@@ -51,10 +52,9 @@ public class Topic<T> {
      *
      * Construct {@code }typeOfT} with one of {@code
      * com.fasterxml.jackson.databind.type.TypeFactory.constructXYZ()} methods such as
-     * {@code mMyConnectionInstance.getTypeFactory().constructType(MyPayloadClass.class)} or see
-     * source of {@link com.tinode.PresTopic} constructor.
+     * {@code mMyConnectionInstance.getTypeFactory().constructType(MyPayloadClass.class)}.
      *
-     * The actual topic name will be set after completion of a successful Subscribe call
+     * The actual topic name will be set after completion of a successful subscribe call
      *
      * @param tinode tinode instance
      * @param typeOfT type of content
@@ -70,7 +70,7 @@ public class Topic<T> {
      *
      */
     public Topic(Tinode tinode, Class<?> typeOfT, Listener<T> l) {
-        this(tinode, tinode.getTypeFactory().constructType(typeOfT), l);
+        this(tinode, Tinode.getTypeFactory().constructType(typeOfT), l);
     }
 
     /**
@@ -78,24 +78,24 @@ public class Topic<T> {
      *
      * @throws IOException
      */
-    public void Subscribe() throws IOException {
+    public PromisedReply subscribe() throws IOException {
         if (!mSubscribed) {
-            mTinode.subscribe(this, null);
+            return mTinode.subscribe(getName());
         }
+        return null;
     }
 
     /**
-     * Unsubscribe topic
+     * Leave topic
+     * @param unsub true to disconnect and unsubscribe from topic, otherwise just disconnect
      *
      * @throws IOException
      */
-    public void Unsubscribe() throws IOException {
-        if (mStatus == STATUS_SUBSCRIBED) {
-            String id = mConnection.unsubscribe(this);
-            if (id != null) {
-                mReplyExpected.put(id, PACKET_TYPE_UNSUB);
-            }
+    public PromisedReply leave(boolean unsub) throws IOException {
+        if (mSubscribed) {
+            return mTinode.leave(getName(), unsub);
         }
+        return null;
     }
 
     /**
@@ -104,11 +104,8 @@ public class Topic<T> {
      * @param content payload
      * @throws IOException
      */
-    public void Publish(T content) throws IOException {
-        String id = mConnection.publish(this, content);
-        if (id != null) {
-            mReplyExpected.put(id, PACKET_TYPE_PUB);
-        }
+    public PromisedReply Publish(T content) throws IOException {
+        return mTinode.publish(getName(), content);
     }
 
     public JavaType getDataType() {
@@ -129,37 +126,36 @@ public class Topic<T> {
         mListener = l;
     }
 
-    public int getStatus() {
-        return mStatus;
-    }
     public boolean isSubscribed() {
-        return mStatus == STATUS_SUBSCRIBED;
-    }
-    protected void setStatus(int status) {
-        mStatus = status;
+        return mSubscribed;
     }
 
     protected void disconnected() {
-        mReplyExpected.clear();
-        if (mStatus != STATUS_UNSUBSCRIBED) {
-            mStatus = STATUS_UNSUBSCRIBED;
+        if (mSubscribed) {
+            mSubscribed = false;
             if (mListener != null) {
                 mListener.onUnsubscribe(503, "connection lost");
             }
         }
     }
 
+    protected void routeMeta(MsgServerMeta meta) {
+    }
+
+    protected void routeData(MsgServerData data) {
+    }
+
+    protected void routePres(MsgServerPres pres) {
+    }
+
+    protected void routeInfo(MsgServerInfo info) {
+    }
+
     @SuppressWarnings("unchecked")
     protected boolean dispatch(ServerMessage<?,?,?> pkt) {
         Log.d(TAG, "Topic " + getName() + " dispatching");
         ServerMessage<T,?,?> msg = null;
-        try {
-            // This generates the "unchecked" warning
-            msg = (ServerMessage<T>)pkt;
-        } catch (ClassCastException e) {
-            Log.i(TAG, "Invalid type of content in Topic [" + getName() + "]");
-            return false;
-        }
+
         if (mListener != null) {
             if (msg.data != null) { // Incoming data packet
                 mListener.onData(msg.data.origin, msg.data.content);
@@ -174,9 +170,7 @@ public class Topic<T> {
                     mListener.onSubscribe(msg.ctrl.code, msg.ctrl.text);
                 } else if (type == PACKET_TYPE_UNSUB) {
                     mStatus = STATUS_UNSUBSCRIBED;
-                    mListener.onUnsubscribe(msg.ctrl.code, msg.ctrl.text);
-                } else if (type == PACKET_TYPE_PUB) {
-                    mListener.onPublish(msg.ctrl.topic, msg.ctrl.code, msg.ctrl.text);
+                    mListener.onLeave(msg.ctrl.code, msg.ctrl.text);
                 } else {
                     return false;
                 }
@@ -189,7 +183,8 @@ public class Topic<T> {
     public interface Listener<T> {
         public void onSubscribe(int code, String text);
         public void onUnsubscribe(int code, String text);
-        public void onPublish(String topicName, int code, String text);
         public void onData(String from, T content);
+        public void onPres();
+        public void onMeta();
     }
 }

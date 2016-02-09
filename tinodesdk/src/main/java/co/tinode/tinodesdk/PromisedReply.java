@@ -9,16 +9,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Attempt at a a very simple thanable promise.
+ * A very simple thanable promise.
  */
 public class PromisedReply<T> {
-    private static enum State {WAITING, DONE, CANCELLED}
+    private enum State {WAITING, RESOLVED, REJECTED, CANCELLED}
 
     private final BlockingQueue<T> mResult = new ArrayBlockingQueue<>(1);
     private volatile State mState = State.WAITING;
 
-    private CompletionListener<T> mListener = null;
-    private PromisedReply<T> mNextToCall = null;
+    private SuccessListener<T> mSuccess = null;
+    private FailureListener<T> mFailure = null;
+
+    private PromisedReply<T> mNextPromise = null;
 
     private final Executor mExecutor;
 
@@ -26,7 +28,7 @@ public class PromisedReply<T> {
         mExecutor = exec;
     }
 
-    public boolean cancel(boolean mayInterruptIfRunning) {
+    public boolean cancel() {
         mState = State.CANCELLED;
         return true;
     }
@@ -36,7 +38,7 @@ public class PromisedReply<T> {
     }
 
     public boolean isDone() {
-        return mState == State.DONE;
+        return mState == State.RESOLVED || mState == State.REJECTED;
     }
 
     public T get() throws InterruptedException, ExecutionException {
@@ -52,86 +54,80 @@ public class PromisedReply<T> {
         return reply;
     }
 
-    public PromisedReply<T> thenApply(CompletionListener<T> listener) {
-        if (mListener == null) {
-            throw new NullPointerException();
-        }
+    public PromisedReply<T> thenApply(SuccessListener<T> success, FailureListener failure) {
+        mSuccess = success;
+        mFailure = failure;
 
-        mListener = listener;
-        // Setting executor to null because the next promise will be called on this
-        // mExecutor thread anyway.
-        mNextToCall = new PromisedReply<T>(null);
-        return mNextToCall;
-    }
-
-    private T complete(final boolean success, final T data) {
-        if (mListener != null) {
-            if (mExecutor != null) {
-                mExecutor.submit(new Callable<T>() {
-                    @Override
-                    public T call() throws Exception {
-                        T ret = null;
-                        if (success) {
-                            ret = mListener.onSuccess(data);
-                        } else {
-                            mListener.onFailure(data);
-                        }
-                        return ret;
-                    }
-                });
-            } else {
-                if (success) {
-                    mListener.onSuccess(data);
-                } else {
-                    mListener.onFailure(data);
-                }
-            }
-        }
+        mNextPromise = new PromisedReply<T>(mExecutor);
+        return mNextPromise;
     }
 
     private void resolver(final T result) {
-        if (mListener != null) {
+        if (mSuccess != null) {
             try {
-                T ret = mListener.onSuccess(result);
-                if (mNextToCall != null) {
-                    mNextToCall.resolve(ret);
+                PromisedReply<T> ret = mSuccess.onSuccess(result, mNextPromise);
+                if (mNextPromise != null) {
+                    mNextPromise.resolve(ret);
                 }
             } catch (Exception err) {
-                if (mNextToCall != null) {
-                    mNextToCall.reject(err);
+                if (mNextPromise != null) {
+                    mNextPromise.reject(err);
                 }
             }
         }
     }
 
     private void rejecter(final Throwable err) {
-        if (mListener != null) {
+        if (mFailure != null) {
             try {
-                Throwable ret = mListener.onFailure(err);
-                if (mNextToCall != null) {
-                    mNextToCall.resolve(ret);
+                PromisedReply<T> ret = mFailure.onFailure(err);
+                if (mNextPromise != null) {
+                    mNextPromise.resolve(ret);
                 }
-            } catch (Exception err) {
-                if (mNextToCall != null) {
-                    mNextToCall.reject(err);
+            } catch (Exception ex) {
+                if (mNextPromise != null) {
+                    mNextPromise.reject(ex);
                 }
             }
         }
     }
 
     protected boolean resolve(final T result) {
-        if (mState == State.WAITING) {
-            mState = State.DONE;
-            if (mResult.offer(result)) {
+        synchronized (this) {
+            if (mState == State.WAITING) {
+                mState = State.RESOLVED;
+
+                if (mResult.offer(result)) {
+                    if (mExecutor != null) {
+                        mExecutor.execute(new Runnable() {
+                            @Override
+                            public void run() {
+                                resolver(result);
+                            }
+                        });
+                    } else {
+                        resolver(result);
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    protected boolean reject(final Throwable err) {
+        synchronized (this) {
+            if (mState == State.WAITING) {
+                mState = State.REJECTED;
                 if (mExecutor != null) {
                     mExecutor.execute(new Runnable() {
                         @Override
                         public void run() {
-                            resolver(result);
+                            rejecter(err);
                         }
                     });
                 } else {
-                    resolver(result);
+                    rejecter(err);
                 }
                 return true;
             }
@@ -139,24 +135,19 @@ public class PromisedReply<T> {
         return false;
     }
 
-    protected boolean reject(final Throwable err) {
-        if (mState == State.WAITING) {
-            mState = State.DONE;
-            complete(false, err);
-            return true;
-        }
-        return false;
-    }
-
-
-    public class SuccessListener<U> {
-        public U onSuccess(U result) {
-            return null;
+    protected void insertNextPromise(PromisedReply<T> next) {
+        synchronized (this) {
+            if (mNextPromise != null) {
+                next.insertNextPromise(mNextPromise);
+            }
+            mNextPromise = next;
         }
     }
-    public class FailureListener {
-        public Throwable onFailure(Throwable err) {
-            return null;
-        }
+
+    public static abstract class SuccessListener<U> {
+        public abstract PromisedReply<U> onSuccess(U result, PromisedReply<U> next);
+    }
+    public static abstract class FailureListener<U> {
+        public abstract PromisedReply<U> onFailure(Throwable err);
     }
 }
