@@ -28,30 +28,10 @@ public class PromisedReply<T> {
         mExecutor = exec;
     }
 
-    public boolean cancel() {
-        mState = State.CANCELLED;
-        return true;
-    }
-
-    public boolean isCancelled() {
-        return mState == State.CANCELLED;
-    }
-
-    public boolean isDone() {
-        return mState == State.RESOLVED || mState == State.REJECTED;
-    }
-
-    public T get() throws InterruptedException, ExecutionException {
-        return mResult.take();
-    }
-
-    public T get(long timeout, TimeUnit unit)
-            throws InterruptedException, ExecutionException, TimeoutException {
-        final T reply = mResult.poll(timeout, unit);
-        if (reply == null) {
-            throw new TimeoutException();
-        }
-        return reply;
+    protected PromisedReply(Executor exec, T result) {
+        mExecutor = exec;
+        mResult.add(result);
+        mState = State.RESOLVED;
     }
 
     public PromisedReply<T> thenApply(SuccessListener<T> success, FailureListener failure) {
@@ -65,10 +45,8 @@ public class PromisedReply<T> {
     private void resolver(final T result) {
         if (mSuccess != null) {
             try {
-                PromisedReply<T> ret = mSuccess.onSuccess(result, mNextPromise);
-                if (mNextPromise != null) {
-                    mNextPromise.resolve(ret);
-                }
+                PromisedReply<T> ret = mSuccess.onSuccess(result);
+                insertNextPromise(ret);
             } catch (Exception err) {
                 if (mNextPromise != null) {
                     mNextPromise.reject(err);
@@ -81,9 +59,7 @@ public class PromisedReply<T> {
         if (mFailure != null) {
             try {
                 PromisedReply<T> ret = mFailure.onFailure(err);
-                if (mNextPromise != null) {
-                    mNextPromise.resolve(ret);
-                }
+                insertNextPromise(ret);
             } catch (Exception ex) {
                 if (mNextPromise != null) {
                     mNextPromise.reject(ex);
@@ -145,7 +121,7 @@ public class PromisedReply<T> {
     }
 
     public static abstract class SuccessListener<U> {
-        public abstract PromisedReply<U> onSuccess(U result, PromisedReply<U> next);
+        public abstract PromisedReply<U> onSuccess(U result);
     }
     public static abstract class FailureListener<U> {
         public abstract PromisedReply<U> onFailure(Throwable err);
