@@ -274,18 +274,15 @@ public class Tinode {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
             PromisedReply outer = null;
             if (msg.login.id != null) {
-                PromisedReply inner = makePromise(msg.login.id);
+                final PromisedReply inner = makePromise(msg.login.id);
+                outer = new PromisedReply(mExecutor);
                 inner.thenApply(new PromisedReply.SuccessListener() {
                     @Override
                     public PromisedReply onSuccess(Object result) {
-                        return null;
+                        return inner;
                     }
-                }, new PromisedReply.FailureListener() {
-                    @Override
-                    public PromisedReply onFailure(Throwable err) {
-                        return null;
-                    }
-                });
+                }, null);
+                inner.insertNextPromise(outer);
             }
             return outer;
         } catch (JsonProcessingException e) {
