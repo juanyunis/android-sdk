@@ -1,27 +1,34 @@
 package co.tinode.tinodesdk.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /**
  * Created by gene on 31/01/16.
+ *
  */
-public class MsgClientSub<T,U,V> {
+
+public class MsgClientSub<Pu,Pr,Inv> {
     public String id;
     public String topic;
     public String get;
-    public Init<T,U> init;
-    public Sub<V> sub;
+    public Init<Pu,Pr> init;
+    public Sub<Inv> sub;
     public Browse browse;
 
     public MsgClientSub() {
     }
 
-    public class Init<T,U> {
+    public class Init<Pu,Pr> {
         public Defacs defacs;
-        public T publ;
-        public U priv;
+        @JsonProperty("public")
+        public Pu pub;
+        @JsonProperty("private")
+        public Pr priv;
     }
-    public class Sub<V> {
+
+    public class Sub<Inv> {
         public String mode;
-        public V info;
+        public Inv info;
     }
     public class Browse {
         public Integer since;

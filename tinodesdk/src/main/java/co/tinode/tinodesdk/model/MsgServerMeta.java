@@ -1,11 +1,13 @@
 package co.tinode.tinodesdk.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.Date;
 
 /**
  * Created by gsokolov on 2/2/16.
  */
-public class MsgServerMeta<U, V> {
+public class MsgServerMeta<Pu, Pr> {
     public String id;
     public String topic;
     public Date ts;
@@ -24,8 +26,10 @@ public class MsgServerMeta<U, V> {
         public int read;
         public int recv;
         public int clear;
-        public U pub;
-        public V priv;
+        @JsonProperty("public")
+        public Pu pub;
+        @JsonProperty("private")
+        public Pr priv;
     }
     public class Sub {
         public String user;
@@ -34,23 +38,20 @@ public class MsgServerMeta<U, V> {
         public int read;
         public int recv;
         public int clear;
-        public V priv;
+        @JsonProperty("private")
+        public Pr priv;
         public boolean online;
 
         public String topic;
         public int seq;
         public String with;
-        public U pub;
+        @JsonProperty("public")
+        public Pu pub;
         public Seen seen;
     }
     public class Defacs {
         public String auth;
         public String anon;
-    }
-
-    public class Acs {
-        public String want;
-        public String given;
     }
 
     public class Seen {

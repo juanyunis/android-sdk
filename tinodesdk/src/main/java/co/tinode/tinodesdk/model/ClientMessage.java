@@ -13,4 +13,19 @@ public class ClientMessage<T> {
 
     public ClientMessage() {
     }
+    public ClientMessage(MsgClientLogin login) {
+        this.login = login;
+    }
+    public ClientMessage(MsgClientPub<T> pub) {
+        this.pub = pub;
+    }
+    public ClientMessage(MsgClientSub sub) {
+        this.sub = sub;
+    }
+    public ClientMessage(MsgClientLeave leave) {
+        this.leave = leave;
+    }
+    public ClientMessage(MsgClientNote note) {
+        this.note = note;
+    }
 }

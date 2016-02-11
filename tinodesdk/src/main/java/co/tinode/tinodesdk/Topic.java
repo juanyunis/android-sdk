@@ -26,15 +26,19 @@ import java.util.HashMap;
 public class Topic<T> {
     private static final String TAG = "co.tinode.tinodesdk.Topic";
 
-    protected JavaType mTypeOfData;
+    protected JavaType mTypeOfDataContent;
+    protected JavaType mTypeOfPub;
+    protected JavaType mTypeOfPriv;
+
     protected String mName;
     protected Tinode mTinode;
     protected boolean mSubscribed;
+    protected Listener<T> mListener;
 
-    private Listener<T> mListener;
+    protected int seq = 0;
 
     public Topic(Tinode tinode, String name, JavaType typeOfT, Listener<T> l) {
-        mTypeOfData = typeOfT;
+        mTypeOfDataContent = typeOfT;
         mTinode = tinode;
         mName = name;
         mListener = l;
@@ -108,8 +112,8 @@ public class Topic<T> {
         return mTinode.publish(getName(), content);
     }
 
-    public JavaType getDataType() {
-        return mTypeOfData;
+    public JavaType getTypeOfDataContent() {
+        return mTypeOfDataContent;
     }
 
     public String getName() {
@@ -130,61 +134,48 @@ public class Topic<T> {
         return mSubscribed;
     }
 
+    protected void subscribed() {
+        if (!mSubscribed) {
+            mSubscribed = true;
+            mListener.onSubscribe(200, "subscribed");
+        }
+    }
     protected void disconnected() {
         if (mSubscribed) {
             mSubscribed = false;
-            if (mListener != null) {
-                mListener.onUnsubscribe(503, "connection lost");
-            }
+            mListener.onLeave(503, "connection lost");
         }
     }
 
-    protected void routeMeta(MsgServerMeta meta) {
+    protected void routeMeta(MsgServerMeta<?,?> meta) {
     }
 
-    protected void routeData(MsgServerData data) {
+    protected void routeData(MsgServerData<T> data) {
+        // TODO(gene): cache/save message
+        // TODO(gene): cache/save sender
+
+        if (data.seq > seq) {
+            seq = data.seq;
+        }
+        mListener.onData(data);
     }
 
     protected void routePres(MsgServerPres pres) {
+        mListener.onPres(pres);
     }
 
     protected void routeInfo(MsgServerInfo info) {
-    }
+        // TODO(gene): if it's online/offline, updated cached sender
 
-    @SuppressWarnings("unchecked")
-    protected boolean dispatch(ServerMessage<?,?,?> pkt) {
-        Log.d(TAG, "Topic " + getName() + " dispatching");
-        ServerMessage<T,?,?> msg = null;
-
-        if (mListener != null) {
-            if (msg.data != null) { // Incoming data packet
-                mListener.onData(msg.data.origin, msg.data.content);
-            } else if (msg.ctrl != null && msg.ctrl.id != null) {
-                Integer type = mReplyExpected.get(msg.ctrl.id);
-                if (type == PACKET_TYPE_SUB) {
-                    if (msg.ctrl.code >= 200 && msg.ctrl.code < 300) {
-                        mStatus = STATUS_SUBSCRIBED;
-                    } else if (mStatus == STATUS_PENDING) {
-                        mStatus = STATUS_UNSUBSCRIBED;
-                    }
-                    mListener.onSubscribe(msg.ctrl.code, msg.ctrl.text);
-                } else if (type == PACKET_TYPE_UNSUB) {
-                    mStatus = STATUS_UNSUBSCRIBED;
-                    mListener.onLeave(msg.ctrl.code, msg.ctrl.text);
-                } else {
-                    return false;
-                }
-            }
-            return true;
-        }
-        return false;
+        mListener.onInfo(info);
     }
 
     public interface Listener<T> {
         public void onSubscribe(int code, String text);
-        public void onUnsubscribe(int code, String text);
-        public void onData(String from, T content);
-        public void onPres();
+        public void onLeave(int code, String text);
+        public void onData(MsgServerData<T> data);
+        public void onPres(MsgServerPres pres);
+        public void onInfo(MsgServerInfo info);
         public void onMeta();
     }
 }

@@ -4,7 +4,6 @@ import android.os.Build;
 import android.util.Log;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -16,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.TypeFactory;
 
 import java.io.IOException;
+import java.io.InvalidObjectException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.HashMap;
@@ -23,23 +23,20 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executor;
 
 import co.tinode.tinodesdk.model.*;
 
 public class Tinode {
-    private static final String TAG = "co.tinode.tinodesdk.Tinode";
+    private static final String TAG = "tinodesdk.Tinode";
 
     protected static final String TOPIC_NEW = "new";
     protected static final String TOPIC_ME = "me";
-    protected static final String USER_NEW = "new";
 
     private static final String PROTOVERSION = "0";
     private static final String VERSION = "0.5";
     private static final String LIBRARY = "tindroid/" + VERSION;
 
     private static ObjectMapper sJsonMapper;
-    private static JsonFactory sJsonFactory;
     private static TypeFactory sTypeFactory;
 
     private String mApiKey;
@@ -48,8 +45,8 @@ public class Tinode {
 
     private Connection mConnection;
 
-    private String mServerVersion;
-    private String mServerBuild;
+    private String mServerVersion = null;
+    private String mServerBuild = null;
 
     private String mMyUid;
     private int mPacketCount;
@@ -58,11 +55,17 @@ public class Tinode {
 
     private EventListener mListener;
 
-    private ConcurrentMap<String, PromisedReply> mFutures;
+    private ConcurrentMap<String, PromisedReply<ServerMessage>> mFutures;
     private HashMap<String, Topic> mTopics;
 
-    private Executor mExecutor;
-
+    static {
+        sJsonMapper = new ObjectMapper();
+        // Silently ignore unknown properties
+        sJsonMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        // Skip null fields from serialization
+        sJsonMapper.setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
+        sTypeFactory = sJsonMapper.getTypeFactory();
+    }
     /**
      * Initialize Tinode package
      *
@@ -71,12 +74,6 @@ public class Tinode {
      * @param apikey  API key generate by key-gen utility
      */
     public Tinode(String appname, String host, String apikey) {
-        sJsonMapper = new ObjectMapper();
-        // Silently ignore unknown properties
-        sJsonMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        // Skip null fields from serialization
-        sJsonMapper.setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
-        sTypeFactory = sJsonMapper.getTypeFactory();
 
         mAppName = appname;
         mApiKey = apikey;
@@ -86,8 +83,8 @@ public class Tinode {
         mTopics = new HashMap<>();
     }
 
-    public PromisedReply connect() {
-        final PromisedReply<Void> connected = new PromisedReply<>(null);
+    public PromisedReply<Void> connect() {
+        final PromisedReply<Void> connected = new PromisedReply<>();
         if (mConnection == null) {
             try {
                 mConnection = new Connection(
@@ -96,12 +93,20 @@ public class Tinode {
 
                     @Override
                     protected void onConnect() {
-                        connected.resolve(null);
+                        try {
+                            connected.resolve(null);
+                        } catch (Exception e) {
+                            onError(e);
+                        }
                     }
 
                     @Override
                     protected void onMessage(String message) {
-                        dispatchPacket(message);
+                        try {
+                            dispatchPacket(message);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Exception in dispatchPacket: ", e);
+                        }
                     }
 
                     @Override
@@ -118,11 +123,17 @@ public class Tinode {
                         if (mListener != null) {
                             mListener.onDisconnect(true, 0, err.getMessage());
                         }
-                        connected.reject(err);
+                        try {
+                            connected.reject(err);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Exception in Connection.onError: ", e);
+                        }
                     }
                 });
             } catch (URISyntaxException | IOException e) {
-                connected.reject(e);
+                try {
+                    connected.reject(e);
+                } catch (Exception ignored) {}
             }
         }
 
@@ -132,13 +143,13 @@ public class Tinode {
     }
 
     /**
-     * Finds topic for the packet and calls topic's {@link Topic#dispatch(ServerMessage)} method.
+     * Finds topic for the packet and calls topic's appropriate routeXXX method.
      * This method can be safely called from the UI thread after overriding
      * {@link Connection.WsListener#onMessage(String)}
      **
      * @param message message to be parsed dispatched
      */
-    private void dispatchPacket(String message) {
+    private void dispatchPacket(String message) throws Exception {
         if (message == null || message.equals(""))
             return;
 
@@ -175,9 +186,9 @@ public class Tinode {
                 }
             }
 
-            PromisedReply r = mFutures.remove(pkt.ctrl.id);
+            PromisedReply<ServerMessage> r = mFutures.remove(pkt.ctrl.id);
             if (r != null) {
-                r.resolve(pkt.ctrl);
+                r.resolve(pkt);
             }
         } else if (pkt.meta != null) {
             Topic topic = mTopics.get(pkt.meta.topic);
@@ -244,9 +255,6 @@ public class Tinode {
         return sJsonMapper;
     }
 
-    public void setExecutor(Executor exec) {
-        mExecutor = exec;
-    }
     protected String makeUserAgent() {
         return mAppName + " (Android " + Build.VERSION.RELEASE + "; "
                 + Locale.getDefault().toString() + "; "
@@ -263,28 +271,31 @@ public class Tinode {
      *  @return PromisedReply of the reply ctrl message
      *  @throws IOException if there is no connection
      */
-    public PromisedReply loginBasic(String uname, String password) throws IOException {
+    public PromisedReply<ServerMessage> loginBasic(String uname, String password) throws IOException, Exception {
         return login(MsgClientLogin.LOGIN_BASIC, MsgClientLogin.makeBasicToken(uname, password));
     }
 
-    protected PromisedReply login(String scheme, String secret) throws IOException {
-        ClientMessage msg = new ClientMessage();
-        msg.login = new MsgClientLogin(getNextId(), scheme, secret, makeUserAgent());
+    protected PromisedReply<ServerMessage> login(String scheme, String secret) throws IOException, Exception {
+        ClientMessage msg = new ClientMessage(new MsgClientLogin(getNextId(), scheme, secret, makeUserAgent()));
         try {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
-            PromisedReply outer = null;
+            PromisedReply<ServerMessage> future = null;
             if (msg.login.id != null) {
-                final PromisedReply inner = makePromise(msg.login.id);
-                outer = new PromisedReply(mExecutor);
-                inner.thenApply(new PromisedReply.SuccessListener() {
-                    @Override
-                    public PromisedReply onSuccess(Object result) {
-                        return inner;
-                    }
-                }, null);
-                inner.insertNextPromise(outer);
+                future = new PromisedReply<ServerMessage>().
+                        thenApply(
+                                new PromisedReply.SuccessListener<ServerMessage>() {
+                                    @Override
+                                    public PromisedReply<ServerMessage> onSuccess(ServerMessage pkt) throws Exception {
+                                        if (pkt.ctrl == null) {
+                                            throw new InvalidObjectException("Unexpected type of reply packet in login");
+                                        }
+                                        mMyUid = (String) pkt.ctrl.params.get("uid");
+                                        return null;
+                                    }
+                                }, null);
+                mFutures.put(msg.login.id, future);
             }
-            return outer;
+            return future;
         } catch (JsonProcessingException e) {
             return null;
         }
@@ -299,13 +310,12 @@ public class Tinode {
      * @throws IOException
      */
     public PromisedReply subscribe(String topicName) throws IOException {
-        ClientMessage msg = new ClientMessage();
-        msg.sub = new MsgClientSub();
+        ClientMessage msg = new ClientMessage(new MsgClientSub());
         msg.sub.id = getNextId();
         msg.sub.topic = topicName;
         try {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
-            PromisedReply future = new PromisedReply<>(mExecutor);
+            PromisedReply<ServerMessage> future = new PromisedReply<>();
             mFutures.put(msg.sub.id, future);
             return future;
         } catch (JsonProcessingException e) {
@@ -323,14 +333,13 @@ public class Tinode {
      * @throws IOException
      */
     public PromisedReply leave(String topicName, boolean unsub) throws IOException {
-        ClientMessage msg = new ClientMessage();
-        msg.leave = new MsgClientLeave();
+        ClientMessage msg = new ClientMessage(new MsgClientLeave());
         msg.leave.id = getNextId();
         msg.leave.topic = topicName;
         msg.leave.unsub = unsub;
         try {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
-            PromisedReply future = new PromisedReply<>(mExecutor);
+            PromisedReply<ServerMessage> future = new PromisedReply<>();
             mFutures.put(msg.sub.id, future);
             return future;
         } catch (JsonProcessingException e) {
@@ -348,12 +357,12 @@ public class Tinode {
      * @return id of the sent packet, if {@link #wantAkn(boolean)} is set to true, null otherwise
      * @throws IOException
      */
+    @SuppressWarnings("unchecked")
     public PromisedReply publish(String topicName, Object data) throws IOException {
-        ClientMessage msg = new ClientMessage();
-        msg.pub = new MsgClientPub<>(getNextId(), topicName, nNoEchoOnPub, data);
+        ClientMessage msg = new ClientMessage(new MsgClientPub<>(getNextId(), topicName, nNoEchoOnPub, data));
         try {
             send(Tinode.getJsonMapper().writeValueAsString(msg));
-            PromisedReply future = new PromisedReply<>(mExecutor);
+            PromisedReply<ServerMessage> future = new PromisedReply<>();
             mFutures.put(msg.pub.id, future);
             return future;
         } catch (JsonProcessingException e) {
@@ -416,11 +425,11 @@ public class Tinode {
     /**
      * Parse JSON received from the server into {@link ServerMessage}
      *
-     * @param jsonMessage
+     * @param jsonMessage message to parse
      * @return ServerMessage or null
      */
     @SuppressWarnings("unchecked")
-    protected ServerMessage<?> parseServerMessageFromJson(String jsonMessage) {
+    protected ServerMessage parseServerMessageFromJson(String jsonMessage) {
         MsgServerCtrl ctrl = null;
         MsgServerData<?> data = null;
         try {
@@ -428,24 +437,26 @@ public class Tinode {
             JsonParser parser = mapper.getFactory().createParser(jsonMessage);
             // Sanity check: verify that we got "Json Object":
             if (parser.nextToken() != JsonToken.START_OBJECT) {
-                throw new JsonParseException("Packet must start with an object",
+                throw new JsonParseException(parser, "Packet must start with an object",
                         parser.getCurrentLocation());
             }
             // Iterate over object fields:
             while (parser.nextToken() != JsonToken.END_OBJECT) {
                 String name = parser.getCurrentName();
                 parser.nextToken();
-                if (name.equals("ctrl")) {
-                    ctrl = mapper.readValue(parser, MsgServerCtrl.class);
-                } else if (name.equals("data")) {
-                    data = parseMsgServerData(parser);
-                } else { // Unrecognized field, ignore
-                    Log.i(TAG, "Unknown field in packet: '" + name +"'");
+                switch (name) {
+                    case "ctrl":
+                        ctrl = mapper.readValue(parser, MsgServerCtrl.class);
+                        break;
+                    case "data":
+                        data = parseMsgServerData(parser);
+                        break;
+                    default:  // Unrecognized field, ignore
+                        Log.i(TAG, "Unknown field in packet: '" + name + "'");
+                        break;
                 }
             }
             parser.close(); // important to close both parser and underlying reader
-        } catch (JsonParseException e) {
-            e.printStackTrace();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -459,61 +470,27 @@ public class Tinode {
         return null;
     }
 
-    protected MsgServerData<?> parseMsgServerData(JsonParser parser) throws JsonParseException,
-            IOException {
+    protected MsgServerData<?> parseMsgServerData(JsonParser parser) throws IOException {
         ObjectMapper mapper = Tinode.getJsonMapper();
         JsonNode data = mapper.readTree(parser);
         if (data.has("topic")) {
             String topicName = data.get("topic").asText();
-            Topic<?> topic = getSubscribedTopic(topicName);
-            // Is this a topic we are subscribed to?
-            if (topic == null) {
-                // This is a new topic
-
-                // Try to find a topic pending subscription by packet id
-                if (data.has("id")) {
-                    String id = data.get("id").asText();
-                    Cmd cmd = mRequests.get(id);
-                    if (cmd != null) {
-                        topic = cmd.source;
-                    }
-                }
-
-                // If topic was not found among pending subscriptions, try to create it
-                if (topic == null && mListener != null) {
-                    topic = mListener.onNewTopic(topicName);
-                    if (topic != null) {
-                        topic.setStatus(Topic.STATUS_SUBSCRIBED);
-                        mSubscriptions.put(topicName, topic);
-                    } else if (topicName.startsWith(TOPIC_P2P)) {
-                        // Client refused to create topic. If this is a P2P topic, assume
-                        // the payload is the same as "!me"
-                        topic = getSubscribedMeTopic();
-                    }
-                }
-            }
-
-            JavaType typeOfData;
-            if (topic == null) {
-                Log.i(TAG, "Data message for unknown topic [" + topicName + "]");
-                typeOfData = mapper.getTypeFactory().constructType(Object.class);
-            } else {
-                typeOfData = topic.getDataType();
-            }
+            Topic<?> topic = getTopic(topicName);
+            JavaType typeOfDataContent = topic.getTypeOfDataContent();
             MsgServerData packet = new MsgServerData();
             if (data.has("id")) {
                 packet.id = data.get("id").asText();
             }
             packet.topic = topicName;
             if (data.has("origin")) {
-                packet.origin = data.get("origin").asText();
+                packet.from = data.get("origin").asText();
             }
             if (data.has("content")) {
-                packet.content = mapper.readValue(data.get("content").traverse(), typeOfData);
+                packet.content = mapper.readValue(data.get("content").traverse(), typeOfDataContent);
             }
             return packet;
         } else {
-            throw new JsonParseException("Invalid data packet: missing topic name",
+            throw new JsonParseException(parser, "Invalid data packet: missing topic name",
                     parser.getCurrentLocation());
         }
     }
@@ -538,8 +515,8 @@ public class Tinode {
      * @param id id of the message which will resolve/reject this promise
      * @return created promise
      */
-    private PromisedReply makePromise(String id) {
-        PromisedReply promise = new PromisedReply<>(mExecutor);
+    private PromisedReply<ServerMessage> makePromise(String id) {
+        PromisedReply<ServerMessage> promise = new PromisedReply<>();
         mFutures.put(id, promise);
         return promise;
     }

@@ -29,7 +29,7 @@ package co.tinode.tinodesdk;
  * return from onSuccess using the result from P3.
  * 2. If P1.onSuccess returns a rejected promise P3, P2 is rejected immediately on
  * return from onSuccess using the throwable from P3.
- * 2. If P1.onSuccess returns null, P2 is resolved immediately using null as a result.
+ * 2. If P1.onSuccess returns null, P2 is resolved immediately using result from P1.
  * 3. If P1.onSuccess returns an unresolved promise P3, P2 is resolved together with P3.
  * 4. If P1.onSuccess throws an exception, P2 is rejected immediately on catching the exception.
  * 5. If P1.onSuccess is null, P2 is resolved immediately using result from P1.
@@ -144,7 +144,7 @@ public class PromisedReply<T> {
         }
 
         if (ret == null) {
-            mNextPromise.resolve(null);
+            mNextPromise.resolve(mResult);
         } else if (ret.mState == State.RESOLVED) {
             mNextPromise.resolve(ret.mResult);
         } else if (ret.mState == State.REJECTED) {
@@ -212,9 +212,9 @@ public class PromisedReply<T> {
     }
 
     public static abstract class SuccessListener<U> {
-        public abstract PromisedReply<U> onSuccess(U result);
+        public abstract PromisedReply<U> onSuccess(U result) throws Exception;
     }
     public static abstract class FailureListener<U> {
-        public abstract PromisedReply<U> onFailure(Exception err);
+        public abstract PromisedReply<U> onFailure(Exception err) throws Exception;
     }
 }
