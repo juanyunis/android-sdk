@@ -57,8 +57,6 @@ public class PromisedReply<T> {
 
     private PromisedReply<T> mNextPromise = null;
 
-    //private final Executor mExecutor;
-
     /**
      * Create promise in WAITING state.
      */

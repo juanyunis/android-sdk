@@ -6,8 +6,11 @@ package co.tinode.tinodesdk.model;
 public class MsgClientLeave {
     public String id;
     public String topic;
-    public Boolean unsub;
+    public boolean unsub;
 
-    public MsgClientLeave() {
+    public MsgClientLeave(String id, String topic, boolean unsub) {
+        this.id = id;
+        this.topic = topic;
+        this.unsub = unsub;
     }
 }

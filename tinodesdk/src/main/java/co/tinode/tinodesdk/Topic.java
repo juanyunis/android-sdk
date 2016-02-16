@@ -23,12 +23,11 @@ import java.util.HashMap;
  * Class for handling communication on a single topic
  *
  */
-public class Topic<T> {
+public class Topic<T,Pu,Pr> {
     private static final String TAG = "co.tinode.tinodesdk.Topic";
 
-    protected JavaType mTypeOfDataContent;
-    protected JavaType mTypeOfPub;
-    protected JavaType mTypeOfPriv;
+    protected JavaType mTypeOfDataPacket;
+    protected JavaType mTypeOfMetaPacket;
 
     protected String mName;
     protected Tinode mTinode;
@@ -38,7 +37,10 @@ public class Topic<T> {
     protected int seq = 0;
 
     public Topic(Tinode tinode, String name, JavaType typeOfT, Listener<T> l) {
-        mTypeOfDataContent = typeOfT;
+        mTypeOfDataPacket = Tinode.getTypeFactory()
+                .constructParametricType(MsgServerData.class, typeOfT);
+        //mTypeOfMetaPacket = Tinode.getTypeFactory()
+        //        .constructParametricType(MsgServerMeta.class, typeOfPu, typeOfPr);
         mTinode = tinode;
         mName = name;
         mListener = l;
@@ -112,8 +114,15 @@ public class Topic<T> {
         return mTinode.publish(getName(), content);
     }
 
-    public JavaType getTypeOfDataContent() {
+    protected JavaType getTypeOfDataContent() {
         return mTypeOfDataContent;
+    }
+
+    public JavaType getTypeOfDataPacket() {
+        return Tinode.getTypeFactory().constructParametricType(MsgServerData.class, mTypeOfDataContent);
+    }
+    public JavaType getTypeOfMetaPacket() {
+
     }
 
     public String getName() {
